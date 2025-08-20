@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "minAppVersion": "0.15.0",
   "description": "Fills YAML-Frontmatter automatically with adress and coordinates via Nominatim.",
-  "author": "ChatGPT",
+  "author": "Thomas Widera",
   "isDesktopOnly": false
 }
