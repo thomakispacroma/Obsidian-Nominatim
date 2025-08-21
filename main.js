@@ -1,21 +1,31 @@
 /*
 Obsidian Plugin: Nominatim
-Automatically fills YAML frontmatter with address or coordinates using OpenStreetMap Nominatim.
+It fills YAML frontmatter with address or coordinates using OpenStreetMap Nominatim.
 - If 'address' exists → writes location: ["lat", "lon"]
-- If 'location' exists → writes address
-All values are stored as strings in quotes to maintain consistency.
+- If 'location' exists → writes address: "text"
+created with ChatGPT
 */
 
-const { Plugin } = require('obsidian');
+const { Plugin, Modal, Notice } = require('obsidian');
 
 module.exports = class NominatimPlugin extends Plugin {
   async onload() {
-    // Register an event listener to detect changes in files
-    this.registerEvent(
-      this.app.metadataCache.on("changed", async (file) => {
-        await this.updateFrontmatter(file);
-      })
-    );
+    // Trigger when file is opened
+this.registerEvent(
+  this.app.workspace.on("file-open", async (file) => {
+    if (file) {
+      await this.updateFrontmatter(file);
+    }
+  })
+);
+
+// Trigger when metadata changes
+this.registerEvent(
+  this.app.metadataCache.on("changed", async (file) => {
+    await this.updateFrontmatter(file);
+  })
+);
+
   }
 
   async updateFrontmatter(file) {
@@ -26,32 +36,38 @@ module.exports = class NominatimPlugin extends Plugin {
       const fm = { ...cache.frontmatter };
       let newFm = { ...fm };
 
-      // If 'address' exists but 'location' does not or is invalid, geocode address
+      let needsUpdate = false;
+
+      // Case 1: address exists, location missing
       if (fm.address && (!fm.location || fm.location.length !== 2)) {
         const coords = await this.geocodeAddress(fm.address);
         if (coords) {
-          newFm.location = [coords.lat, coords.lon]; // keep as strings
+          newFm.location = [coords.lat, coords.lon];
+          needsUpdate = true;
         }
-      } 
-      // If 'location' exists but 'address' does not, reverse geocode
+      }
+      // Case 2: location exists, address missing
       else if (fm.location && fm.location.length === 2 && !fm.address) {
         const [lat, lon] = fm.location;
         const addr = await this.reverseGeocode(lat, lon);
         if (addr) {
           newFm.address = addr;
+          needsUpdate = true;
         }
       }
 
-      // Only write if there is a real change to prevent duplicate frontmatter
-      if (JSON.stringify(fm) !== JSON.stringify(newFm)) {
-        await this.writeFrontmatter(file, newFm);
+      // Ask user before writing
+      if (needsUpdate && JSON.stringify(fm) !== JSON.stringify(newFm)) {
+        new ConfirmModal(this.app, async () => {
+          await this.writeFrontmatter(file, newFm);
+          new Notice(`Nominatim: Updated frontmatter in "${file.basename}"`);
+        }, file.basename).open();
       }
     } catch (e) {
       console.error("Nominatim plugin error", e);
     }
   }
 
-  // Convert an address into coordinates using Nominatim
   async geocodeAddress(address) {
     const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`;
     const res = await fetch(url, { headers: { 'User-Agent': 'Obsidian-Nominatim' } });
@@ -62,7 +78,6 @@ module.exports = class NominatimPlugin extends Plugin {
     return null;
   }
 
-  // Convert coordinates into a human-readable address using Nominatim
   async reverseGeocode(lat, lon) {
     const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`;
     const res = await fetch(url, { headers: { 'User-Agent': 'Obsidian-Nominatim' } });
@@ -70,7 +85,6 @@ module.exports = class NominatimPlugin extends Plugin {
     return data?.display_name || null;
   }
 
-  // Write the updated frontmatter back to the note
   async writeFrontmatter(file, newFm) {
     const content = await this.app.vault.read(file);
     const yamlRegex = /^---\n([\s\S]*?)\n---/;
@@ -87,7 +101,6 @@ module.exports = class NominatimPlugin extends Plugin {
     await this.app.vault.modify(file, newContent);
   }
 
-  // Convert a JavaScript object to YAML, keeping all values as strings in quotes
   objToYaml(obj) {
     return Object.entries(obj)
       .map(([k, v]) => {
@@ -100,3 +113,35 @@ module.exports = class NominatimPlugin extends Plugin {
       .join("\n");
   }
 };
+
+// A simple confirmation modal
+class ConfirmModal extends Modal {
+  constructor(app, onConfirm, filename) {
+    super(app);
+    this.onConfirm = onConfirm;
+    this.filename = filename;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Nominatim" });
+    contentEl.createEl("p", { text: `Do you want to nominatim the "address" or "location"?`});
+
+    const buttonContainer = contentEl.createDiv({ cls: "modal-button-container" });
+
+    const okBtn = buttonContainer.createEl("button", { text: "Yes" });
+    okBtn.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+
+    const cancelBtn = buttonContainer.createEl("button", { text: "No" });
+    cancelBtn.addEventListener("click", () => {
+      this.close();
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
